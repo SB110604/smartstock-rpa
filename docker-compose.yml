@@ -1,0 +1,127 @@
+name: smartstock
+
+x-backend: &backend
+  build:
+    context: ./backend
+  env_file:
+    - path: .env
+      required: false
+  environment: &backend-env
+    APP_ENV: ${APP_ENV:-development}
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-smartstock}:${POSTGRES_PASSWORD:-smartstock}@db:5432/${POSTGRES_DB:-smartstock}
+    TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-smartstock}:${POSTGRES_PASSWORD:-smartstock}@db:5432/smartstock_test
+    REDIS_URL: redis://redis:6379/0
+    SMTP_HOST: ${SMTP_HOST:-mailpit}
+    SMTP_PORT: ${SMTP_PORT:-1025}
+    STORAGE_DIR: /data
+    BACKUP_DIR: /backups
+    TZ: Asia/Kolkata
+  volumes:
+    - appdata:/data
+    - ./backups:/backups
+    - ./reports:/app/reports
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-smartstock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smartstock}
+      POSTGRES_DB: ${POSTGRES_DB:-smartstock}
+      TZ: Asia/Kolkata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/db-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smartstock} -d ${POSTGRES_DB:-smartstock}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    <<: *backend
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck", "api"]
+      interval: 10s
+      timeout: 5s
+      start_period: 40s
+      retries: 10
+
+  worker:
+    <<: *backend
+    command: celery -A app.tasks.celery_app worker --loglevel=INFO --concurrency=2 -n worker@%h
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck", "worker"]
+      interval: 20s
+      timeout: 10s
+      start_period: 30s
+      retries: 10
+
+  beat:
+    <<: *backend
+    command: celery -A app.tasks.celery_app beat --loglevel=INFO --schedule /tmp/celerybeat-schedule
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck", "beat"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 10
+
+  web:
+    build:
+      context: ./frontend
+      target: web
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  appdata:

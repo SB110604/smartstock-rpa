@@ -1,0 +1,29 @@
+[project]
+name = "smartstock-rpa"
+version = "1.0.0"
+description = "AI-driven Intelligent RPA for adaptive business workflow optimization"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "C4", "RUF"]
+ignore = ["E501", "B008", "RUF001", "RUF002", "RUF003", "RUF012", "N818", "SIM108", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/seed/*", "app/tasks/run.py"]
+
+[tool.coverage.report]
+skip_empty = true

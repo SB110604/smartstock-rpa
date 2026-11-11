@@ -1,0 +1,57 @@
+# DECISIONS
+
+One line each: decision — reason.
+
+- Repository root is this folder (not a nested `smartstock-rpa/`); the spec was moved to `docs/PROJECT_SPEC.md` — DEVELOPMENT_RULES.md and the spec layout both reference `docs/PROJECT_SPEC.md`.
+- Containers use Python 3.11 (spec); code avoids 3.12+ only syntax so it also runs on the dev machine's Python 3.13 — the build machine has no 3.11 installed.
+- Local (non-Docker) development uses a private Postgres 16 cluster on port 5433 (`scripts/dev-db.*`) and native Redis — Docker Desktop is not installed on the build machine; the same code runs unchanged in Compose.
+- Quantities/money use NUMERIC in Postgres surfaced as Python floats (`asdecimal=False`); money rounded to 2 dp in services — exact storage while ML and business code share one numeric type.
+- "Available" = on-hand (non-expired, non-blocked batches) + on-order; low-stock compares available with ROP, out-of-stock uses on-hand — matches inventory-position reorder logic.
+- Selling prices are GST-inclusive (Indian MRP convention); sale tax is backed out per line.
+- Sales-history imports create Sale/SaleLine rows without stock movements — history feeds forecasting and must not change today's stock.
+- Opening-stock imports post `adjustment` movements (not `purchase_in`) so purchase KPIs only count real purchases.
+- Negative-stock attempts are written to the audit log (`negative_stock_attempt`) — the anomaly agent reads them.
+- 2FA is offered to admin accounts only (spec: "optional TOTP 2FA for admin").
+- lucide-react used for icons and clsx for class names — small utilities, not frameworks; no UI framework added.
+- PDF fonts come from matplotlib's bundled DejaVu Sans so ₹ renders identically on every OS without system fonts.
+- Docker image includes dev tools (pytest, ruff) so `make test` / `make lint` run inside the api container.
+- Seed wipes all tables (TRUNCATE … RESTART IDENTITY) before loading — `make seed` must be repeatable and deterministic (numpy seed 42).
+- Seeded history uses bulk inserts and one aggregated `sale_out` movement per product-day (sale lines keep full detail) — keeps seeding well under the 3-minute target.
+- Historical sales are recorded as channel `pos_api` (the store's POS feed); seed adds a second supplier login (supplier2@demo.in) to demonstrate supplier isolation.
+- One-click approval links open a small confirm page (approve = one click, reject asks for a reason) instead of acting on GET — mail scanners prefetch links and must not approve purchases.
+- Approval tokens are 256-bit random values stored only as SHA-256 hashes, single-use, 48 h expiry, per approver and channel (email vs Telegram prefix records `via`).
+- Feedback is written once per request at its final decision (approved / edited / rejected), not per approval level; auto-approvals write no feedback (no human signal) — keeps the learning EMA unbiased.
+- Admin may act on any approval level (including escalated manager-level items); managers cannot act on admin levels.
+- GRN `received_qty` = good units into stock; `damaged_qty` units go to a blocked quarantine batch (`DMG-…`) and a supplier-return draft, so `return_out` has real stock to move.
+- POs auto-close after a successful 3-way match; a mismatch moves the PO to INVOICED and blocks closing until a manager resolves it with a note.
+- Supplier portal returns 403 (not 404) for another supplier's PO — explicit, and covered by tests.
+- Forecast model uses Poisson loss and an extra categorical "upcoming festival" feature (which festival, not just a flag) — a generic flag made the model over-forecast Navratri as if it were Diwali.
+- MAPE ignores zero-sales days (undefined); RMSE/WAPE are reported alongside so low-volume products don't dominate.
+- ABC uses cumulative revenue share including the item (≤ 80 % → A, ≤ 95 % → B); the top item is always A.
+- Reorder decision compares the inventory position (on hand + on order) with ROP; perishable cap is applied before pack rounding (final qty may exceed the cap by < one pack).
+- Supplier choice per product uses product-level price and lead (actual average lead from history, stated lead otherwise) plus supplier-level on-time and quality; suppliers without history start at a neutral 75 % on-time / 95 quality.
+- Auto-order skips products that already have an open request or open PO line, and products whose priority was lowered by repeated rejections unless they are out of stock.
+- Emails are queued on Celery (`jobs.send_email`, retried) with an inline fallback if the broker is down — keeps agents and requests fast when SMTP is slow.
+- Seed post-processing computes six monthly supplier-score snapshots so score/on-time trend charts have history on first login.
+- The eight agents are the seven pipeline agents plus the continuous-learning agent (weekly retraining/drift, phase 5); the chat assistant is the interactive agent on top of read-only tools.
+- Chart colours use the validated reference palette (fixed categorical order, separate light/dark steps) via `useChartColors()`.
+- Retraining compares challenger and incumbent on the same latest 28-day holdout (incumbent re-evaluated with recursive forecasting) and promotes only on strictly lower MAPE; insufficient history skips retraining instead of failing the agent.
+- Daily realised accuracy uses the forecast stored for that day (last forecast written before the day began); drift = rolling 14-day MAPE > 1.5 × training MAPE.
+- The assistant's intent matcher resolves products by whole-word match first ("rice" → every rice SKU), then RapidFuzz WRatio ≥ 70; unrecognised small talk returns the help text instead of a failed product lookup.
+- `draft_purchase_request` creates a DRAFT that must be submitted on the Purchase requests page (spec: "only creates a DRAFT needing normal approval").
+- OCR pre-fill matches lines to the selected PO's items first; per-line confidence = 65 % fuzzy name score + 35 % arithmetic check (qty × rate ≈ amount); the OCR endpoint never writes to the database.
+- Email quotes are matched to suppliers by the sender address and stored as `pending_review`; the UI section is hidden unless IMAP is configured.
+- The top-bar search routes PO numbers to Purchase orders and everything else to the product search.
+- Inventory turnover on the dashboard = 12-month COGS (sale_out movements at cost) ÷ current stock value at cost.
+- Stock value trend is reconstructed by unwinding daily movement values backwards from today's batch valuation (no snapshot table needed).
+- Service worker caches only the app shell and hashed assets; `/api/*` is never cached so stock/approval data is always live.
+- Chat example prompts stay in English in hi/mr because the rule-based matcher is keyword-based in English (it also understands a few Hindi/Marathi words like "kitna", "kiti").
+- Backups use `pg_dump -Fc` (custom format) and `pg_restore --clean --single-transaction`; the restore endpoint requires the literal confirmation "RESTORE".
+- Playwright uses `PW_CHROMIUM_PATH` when set so an already-installed Chromium can be reused instead of downloading browsers.
+- Managers may run the operational agents ("Run now" / full pipeline — the spec's e2e flow has the manager run the orchestrator); running the learning agent (model retraining) stays admin-only.
+- The evaluation simulates both policies on the store's real daily demand with supplier delays sampled from each supplier's history; the baseline does not enforce FEFO (freshest-first picking) and has no markdowns, as spec 12 describes.
+- `docs/API.md` is generated from the FastAPI route table (`scripts/gen_api_docs.py`) so it cannot drift from the code.
+- Security headers (nosniff, frame DENY, referrer policy, camera=self) are set by the API and nginx; production refuses to start with the default SECRET_KEY.
+- `make lint` runs `ruff check` (not `ruff format --check`) in both Docker and LOCAL mode: the code keeps a compact 120-column style that ruff format would reflow; `make fmt` remains available.
+- `npm run screenshots` (separate Playwright config, not part of `npm run e2e`) regenerates the README gallery so the images always come from the real seeded app.
+- Courier tracking: Shiprocket is the real provider (AWB tracking with a cached API-user token); any error, unknown AWB or missing credentials falls back to the simulated status so tracking never breaks.

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+# Node
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/coverage/
+*.tsbuildinfo
+# Env / data
+.env
+.devdata/
+backend/data/
+backups/*
+!backups/.gitkeep
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+**/tests/.data/
+frontend/tests/e2e/.auth/
+
+# Celery Beat runtime state
+celerybeat-schedule*
